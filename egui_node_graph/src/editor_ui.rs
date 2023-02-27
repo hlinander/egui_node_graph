@@ -77,6 +77,7 @@ pub struct GraphNodeWidget<'a, NodeData, DataType, ValueType> {
     pub graph: &'a mut Graph<NodeData, DataType, ValueType>,
     pub port_locations: &'a mut PortLocations,
     pub node_rects: &'a mut NodeRects,
+    pub graph_id: usize,
     pub node_id: NodeId,
     pub ongoing_drag: Option<(NodeId, AnyParameterId)>,
     pub selected: bool,
@@ -109,12 +110,38 @@ where
         ui: &mut Ui,
         all_kinds: impl NodeTemplateIter<Item = NodeTemplate>,
         user_state: &mut UserState,
+        graph_id: usize,
+        tight: bool,
     ) -> GraphResponse<UserResponse, NodeData> {
         // This causes the graph editor to use as much free space as it can.
         // (so for windows it will use up to the resizeably set limit
         // and for a Panel it will fill it completely)
         let editor_rect = ui.max_rect();
-        ui.allocate_rect(editor_rect, Sense::hover());
+        if !tight {
+            ui.allocate_rect(editor_rect, Sense::hover());
+        } else {
+            let p = self.node_positions.values().nth(0).unwrap().clone();
+            let max_pos: Pos2 = self.node_positions.values().fold(p, |a, &b| a.max(b));
+            let min_pos: Pos2 = self.node_positions.values().fold(p, |a, &b| a.min(b));
+            let top_left = ui.next_widget_position();
+            let rect = Rect::from_two_pos(
+                min_pos + top_left.to_vec2(),
+                max_pos + top_left.to_vec2() + Vec2::new(100.0, 100.0),
+            );
+            let bg_rect = Rect::from_two_pos(
+                min_pos + top_left.to_vec2() - Vec2::new(5.0, 5.0),
+                max_pos + top_left.to_vec2() + Vec2::new(105.0, 105.0),
+            );
+            ui.allocate_rect(rect, Sense::hover());
+            let body = Shape::Rect(RectShape {
+                rect: bg_rect,
+                rounding: Rounding::none(),
+                fill: Color32::from_gray(100),
+                stroke: Stroke::none(),
+            });
+            ui.painter().add(body);
+            //ui.allocate_rect(Rect::from, sense)
+        }
 
         let cursor_pos = ui.ctx().input().pointer.hover_pos().unwrap_or(Pos2::ZERO);
         let mut cursor_in_editor = editor_rect.contains(cursor_pos);
@@ -150,6 +177,7 @@ where
                 port_locations: &mut port_locations,
                 node_rects: &mut node_rects,
                 node_id,
+                graph_id,
                 ongoing_drag: self.connection_in_progress,
                 selected: self
                     .selected_nodes
@@ -157,7 +185,7 @@ where
                     .any(|selected| *selected == node_id),
                 pan: self.pan_zoom.pan + editor_rect.min.to_vec2(),
             }
-            .show(ui, user_state);
+            .show(ui, user_state, graph_id);
 
             // Actions executed later
             delayed_responses.extend(responses);
@@ -425,7 +453,6 @@ where
         if mouse.primary_released() || drag_released_on_background {
             self.ongoing_box_selection = None;
         }
-
         GraphResponse {
             node_responses: delayed_responses,
             cursor_in_editor,
@@ -465,17 +492,18 @@ where
         WidgetValueTrait<Response = UserResponse, UserState = UserState, NodeData = NodeData>,
     DataType: DataTypeTrait<UserState>,
 {
-    pub const MAX_NODE_SIZE: [f32; 2] = [200.0, 200.0];
+    pub const MAX_NODE_SIZE: [f32; 2] = [1000.0, 1000.0];
 
     pub fn show(
         self,
         ui: &mut Ui,
         user_state: &mut UserState,
+        graph_id: usize,
     ) -> Vec<NodeResponse<UserResponse, NodeData>> {
         let mut child_ui = ui.child_ui_with_id_source(
             Rect::from_min_size(*self.position + self.pan, Self::MAX_NODE_SIZE.into()),
             Layout::default(),
-            self.node_id,
+            (graph_id, self.node_id),
         );
 
         Self::show_graph_node(self, &mut child_ui, user_state)
@@ -795,7 +823,7 @@ where
 
         let window_response = ui.interact(
             outer_rect,
-            Id::new((self.node_id, "window")),
+            Id::new((self.graph_id, self.node_id, "window")),
             Sense::click_and_drag(),
         );
 
